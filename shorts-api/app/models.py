@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, BigInteger, DateTime
+#models.py
+from sqlalchemy import Column, Integer, String, BigInteger, DateTime , ForeignKey, Boolean
 from .database import Base
 from datetime import datetime
 
@@ -25,3 +26,7 @@ class Video(Base):
     
     # 업로드 시각
     uploaded_at = Column(DateTime, default=datetime.now)
+
+    # 수정 시각
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    

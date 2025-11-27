@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shorts - 동영상 플랫폼</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000;
+            overflow-x: hidden;
+        }
+
+        /* 쇼츠 컨테이너 */
+        .shorts-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            overflow-y: scroll;
+            scroll-snap-type: y mandatory;
+            scrollbar-width: none;
+        }
+
+        .shorts-container::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* 각 쇼츠 아이템 */
+        .short-item {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            scroll-snap-align: start;
+            background: #000;
+        }
+
+        /* 비디오 컨테이너 (16:9 비율) */
+        .video-wrapper {
+            position: relative;
+            width: calc(100vh * 16 / 9);
+            max-width: 80%;
+            height: 80vh;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .video-wrapper video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* 오른쪽 버튼들 */
+        .action-buttons {
+            position: absolute;
+            right: 5%;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        .action-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .action-btn:hover {
+            transform: scale(1.1);
+            background: rgba(255, 255, 255, 1);
+        }
+
+        .action-btn.download {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .action-btn.delete {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .action-btn.edit {
+            background: linear-gradient(135deg, #ffa726 0%, #fb8c00 100%);
+            color: white;
+        }
+
+        .action-btn.replace {
+            background: linear-gradient(135deg, #66bb6a 0%, #43a047 100%);
+            color: white;
+        }
+
+        /* 비디오 정보 오버레이 */
+        .video-info-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 100px;
+            color: white;
+            z-index: 5;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+
+        .video-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+
+        .video-meta {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        /* 로딩 상태 */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: white;
+            z-index: 1000;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 모달 스타일 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        .modal-header {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .modal-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .modal-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-btn.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .modal-btn.secondary {
+            background: #ddd;
+            color: #333;
+        }
+
+        .modal-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        /* 빈 화면 */
+        .empty-screen {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: white;
+        }
+
+        .empty-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .upload-btn {
+            margin-top: 30px;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        /* 업로드 플로팅 버튼 */
+        .floating-upload {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.6);
+            z-index: 100;
+            transition: all 0.3s;
+        }
+
+        .floating-upload:hover {
+            transform: scale(1.1);
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- 로딩 화면 -->
+    <div class="loading-screen" id="loadingScreen">
+        <div class="spinner"></div>
+        <p>영상을 불러오는 중...</p>
+    </div>
+
+    <!-- 쇼츠 컨테이너 -->
+    <div class="shorts-container" id="shortsContainer">
+        <!-- 동영상들이 여기에 동적으로 추가됩니다 -->
+    </div>
+
+    <!-- 업로드 플로팅 버튼 -->
+    <button class="floating-upload" onclick="document.getElementById('uploadFile').click()" title="영상 업로드">
+        ➕
+    </button>
+    <input type="file" id="uploadFile" accept="video/*">
+
+    <!-- 파일명 수정 모달 (PATCH) -->
+    <div class="modal" id="editModal">
+        <div class="modal-content">
+            <div class="modal-header">파일명 수정</div>
+            <div class="modal-body">
+                <input type="text" class="modal-input" id="editInput" placeholder="새로운 파일명 입력">
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn secondary" onclick="closeEditModal()">취소</button>
+                <button class="modal-btn primary" onclick="saveEdit()">저장</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 파일 교체 모달 (PUT) -->
+    <div class="modal" id="replaceModal">
+        <div class="modal-content">
+            <div class="modal-header">영상 파일 교체</div>
+            <div class="modal-body">
+                <p style="margin-bottom: 15px; color: #666;">새로운 영상 파일을 선택하세요</p>
+                <input type="file" class="modal-input" id="replaceFileInput" accept="video/*">
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn secondary" onclick="closeReplaceModal()">취소</button>
+                <button class="modal-btn primary" onclick="replaceVideo()">교체</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000/api/videos';
+        let videos = [];
+        let currentEditVideoId = null;
+        let currentReplaceVideoId = null;
+
+        // 파일 크기 포맷
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // 동영상 목록 로드
+        async function loadVideos() {
+            const loadingScreen = document.getElementById('loadingScreen');
+            const shortsContainer = document.getElementById('shortsContainer');
+
+            try {
+                const response = await fetch(`${API_URL}/`);
+                videos = await response.json();
+
+                loadingScreen.style.display = 'none';
+
+                if (videos.length === 0) {
+                    shortsContainer.innerHTML = `
+                        <div class="empty-screen">
+                            <div class="empty-icon">🎥</div>
+                            <h2>업로드된 영상이 없습니다</h2>
+                            <p>첫 번째 쇼츠를 업로드해보세요!</p>
+                            <button class="upload-btn" onclick="document.getElementById('uploadFile').click()">
+                                영상 업로드
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                shortsContainer.innerHTML = '';
+
+                videos.forEach((video, index) => {
+                    const shortItem = document.createElement('div');
+                    shortItem.className = 'short-item';
+                    shortItem.id = `short-${video.id}`;
+
+                    const uploadDate = new Date(video.uploaded_at).toLocaleDateString('ko-KR');
+
+                    shortItem.innerHTML = `
+                        <div class="video-wrapper">
+                            <video
+                                id="video-${video.id}"
+                                preload="metadata"
+                                loop
+                                playsinline
+                            >
+                                <source src="${API_URL}/${video.id}/stream" type="video/mp4">
+                            </video>
+
+                            <div class="video-info-overlay">
+                                <div class="video-title">${video.original_filename}</div>
+                                <div class="video-meta">
+                                    ${formatFileSize(video.file_size)} • ${uploadDate}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="action-buttons">
+                            <button class="action-btn download" onclick="downloadVideo(${video.id})" title="다운로드">
+                                ⬇️
+                            </button>
+                            <button class="action-btn edit" onclick="openEditModal(${video.id}, '${video.original_filename}')" title="파일명 수정">
+                                ✏️
+                            </button>
+                            <button class="action-btn replace" onclick="openReplaceModal(${video.id})" title="영상 교체">
+                                🔄
+                            </button>
+                            <button class="action-btn delete" onclick="deleteVideo(${video.id})" title="삭제">
+                                🗑️
+                            </button>
+                        </div>
+                    `;
+
+                    shortsContainer.appendChild(shortItem);
+                });
+
+                // 첫 번째 비디오 자동 재생
+                playVideoInView();
+
+            } catch (error) {
+                console.error('Error:', error);
+                loadingScreen.innerHTML = `
+                    <div class="empty-icon">⚠️</div>
+                    <h2>영상을 불러올 수 없습니다</h2>
+                    <p>서버 연결을 확인해주세요</p>
+                `;
+            }
+        }
+
+        // 스크롤 시 현재 비디오 재생
+        const shortsContainer = document.getElementById('shortsContainer');
+        shortsContainer.addEventListener('scroll', () => {
+            playVideoInView();
+        });
+
+        // 화면에 보이는 비디오 재생
+        function playVideoInView() {
+            const videos = document.querySelectorAll('video');
+            videos.forEach(video => {
+                const rect = video.getBoundingClientRect();
+                const isInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
+
+                if (isInView) {
+                    video.play().catch(e => console.log('Autoplay prevented:', e));
+                } else {
+                    video.pause();
+                }
+            });
+        }
+
+        // 비디오 클릭 시 재생/일시정지
+        document.addEventListener('click', (e) => {
+            if (e.target.tagName === 'VIDEO') {
+                if (e.target.paused) {
+                    e.target.play();
+                } else {
+                    e.target.pause();
+                }
+            }
+        });
+
+        // 다운로드
+        function downloadVideo(videoId) {
+            window.open(`${API_URL}/${videoId}/download`, '_blank');
+        }
+
+        // 삭제
+        async function deleteVideo(videoId) {
+            if (!confirm('정말 삭제하시겠습니까?')) {
+                return;
+            }
+
+            // 🔑 핵심: 모든 비디오 요소의 파일 핸들 해제
+            const allVideoElements = document.querySelectorAll('video');
+            allVideoElements.forEach(video => {
+                video.pause();
+                video.src = '';
+                video.load();
+            });
+
+            // 브라우저가 파일 핸들을 완전히 해제할 시간을 충분히 줌
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            try {
+                const response = await fetch(`${API_URL}/${videoId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    alert('삭제 완료!');
+                    loadVideos();
+                } else {
+                    alert('삭제 실패');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('삭제 중 오류 발생');
+            }
+        }
+
+        // 파일명 수정 모달 열기 (PATCH)
+        function openEditModal(videoId, currentFilename) {
+            currentEditVideoId = videoId;
+            document.getElementById('editInput').value = currentFilename;
+            document.getElementById('editModal').classList.add('active');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+            currentEditVideoId = null;
+        }
+
+        async function saveEdit() {
+            const newFilename = document.getElementById('editInput').value.trim();
+
+            if (!newFilename) {
+                alert('파일명을 입력해주세요');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/${currentEditVideoId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        original_filename: newFilename
+                    })
+                });
+
+                if (response.ok) {
+                    alert('파일명 수정 완료!');
+                    closeEditModal();
+                    loadVideos();
+                } else {
+                    const error = await response.json();
+                    alert('수정 실패: ' + error.detail);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('수정 중 오류 발생');
+            }
+        }
+
+        // 파일 교체 모달 열기 (PUT)
+        function openReplaceModal(videoId) {
+            currentReplaceVideoId = videoId;
+            document.getElementById('replaceFileInput').value = '';
+            document.getElementById('replaceModal').classList.add('active');
+        }
+
+        function closeReplaceModal() {
+            document.getElementById('replaceModal').classList.remove('active');
+            currentReplaceVideoId = null;
+        }
+
+        async function replaceVideo() {
+            const fileInput = document.getElementById('replaceFileInput');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('파일을 선택해주세요');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_URL}/${currentReplaceVideoId}`, {
+                    method: 'PUT',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    alert('영상 교체 완료!');
+                    closeReplaceModal();
+                    loadVideos();
+                } else {
+                    const error = await response.json();
+                    alert('교체 실패: ' + error.detail);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('교체 중 오류 발생');
+            }
+        }
+
+        // 업로드
+        document.getElementById('uploadFile').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const loadingScreen = document.getElementById('loadingScreen');
+            loadingScreen.style.display = 'flex';
+            loadingScreen.innerHTML = `
+                <div class="spinner"></div>
+                <p>업로드 중...</p>
+            `;
+
+            try {
+                const response = await fetch(`${API_URL}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.status === 201) {
+                    alert('업로드 성공!');
+                    loadVideos();
+                } else {
+                    const error = await response.json();
+                    alert('업로드 실패: ' + error.detail);
+                    loadingScreen.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('업로드 중 오류 발생');
+                loadingScreen.style.display = 'none';
+            }
+
+            e.target.value = '';
+        });
+
+        // 모달 외부 클릭 시 닫기
+        document.getElementById('editModal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                closeEditModal();
+            }
+        });
+
+        document.getElementById('replaceModal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                closeReplaceModal();
+            }
+        });
+
+        // 페이지 로드 시 동영상 목록 로드
+        loadVideos();
+    </script>
+</body>
+</html>
