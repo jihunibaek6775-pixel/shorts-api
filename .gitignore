@@ -206,5 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-shorts-api/app/video-metadata.db
+shorts-api/app/video_metadata.db
+# 'videos' 폴더 내의 모든 파일과 서브 디렉토리를 무시
 shorts-api/uploads/videos/*
+
+# 단, '.gitkeep' 파일만은 예외로 추적
+!shorts-api/uploads/videos/.gitkeep
