@@ -1,0 +1,64 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+  # 가상환경
+venv/
+env/
+ENV/
+.venv
+
+# 환경 변수 (민감한 정보)
+.env
+.env.*
+
+# IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 데이터베이스 (로컬 개발용)
+*.db
+*.sqlite
+*.sqlite3
+
+# 업로드된 파일 (로컬 개발 중 생성된 파일들)
+uploads/videos/*           # 업로드된 파일은 제외
+!uploads/videos/.gitkeep   # .gitkeep은 포함 (폴더 구조 유지)
+
+# 테스트 및 커버리지
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 로그
+*.log
+
+# OS 관련
+.DS_Store
+Thumbs.db
+*.swp
+
+# Docker 관련
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 문서
+README.md
+docs/
+*.md

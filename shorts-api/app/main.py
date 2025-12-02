@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import videos
+from .routers import videos , likes , comments
 from .database import Base, engine , init_db
 from . import models
 
@@ -33,6 +33,8 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(videos.router)
+app.include_router(likes.router) 
+app.include_router(comments.router)
 
 # 루트 엔드포인트
 @app.get("/")

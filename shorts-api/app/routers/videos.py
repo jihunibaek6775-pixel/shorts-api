@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session # 세션 임포트
 from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db # DB 관련 임포트
 from app.schemas import Video as VideoSchema,VideoUpdate # 스키마 임포트
-from app.models import Video
+from app.models import Video,Comments,Like
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -29,6 +29,42 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 
 # 🚫 임시 저장소 videos_db 삭제 또는 주석 처리
+
+@router.get("/search")
+async def search_videos(
+    q: str,
+    skip: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """동영상 검색 - 문자열 포함 검색"""
+    
+    videos = db.query(Video).filter(
+        Video.original_filename.ilike(f"%{q}%")  # ilike = 대소문자 무시
+    ).offset(skip).limit(limit).all()
+    
+    total = db.query(Video).filter(
+        Video.original_filename.ilike(f"%{q}%")
+    ).count()
+    
+    # dict로 변환 (JSON 직렬화를 위해)
+    video_list = []
+    for video in videos:
+        video_list.append({
+            "id": video.id,
+            "filename": video.filename,
+            "original_filename": video.original_filename,
+            "file_path": video.file_path,
+            "file_size": video.file_size,
+            "content_type": video.content_type,
+            "uploaded_at": video.uploaded_at.isoformat() if video.uploaded_at else None,
+            "updated_at": video.updated_at.isoformat() if video.updated_at else None
+        })
+    
+    return {
+        "total": total,
+        "videos": video_list
+    }
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED, response_model=VideoSchema)
 async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)): # 👈 DB 의존성 주입
@@ -233,8 +269,9 @@ async def download_video(video_id: int, db: Session = Depends(get_db)):
 async def delete_video(video_id: int, db: Session = Depends(get_db)): # 👈 DB 의존성 주입
     """동영상 삭제"""
     
-    # 비디오 찾기
+    # 비디오 , 댓글 , 좋아요 찾기
     video = db.query(Video).filter(Video.id == video_id).first()
+
     
     if not video:
         raise HTTPException(
@@ -247,6 +284,11 @@ async def delete_video(video_id: int, db: Session = Depends(get_db)): # 👈 DB 
 
      # DB에서 먼저 삭제
     try:
+        db.query(Comments).filter(Comments.video_id == video_id).delete()
+        
+        # 2. 좋아요 전체 삭제
+        db.query(Like).filter(Like.video_id == video_id).delete()
+
         db.delete(video)
         db.commit()
         logger.info(f"✅ DB 삭제 완료: video_id={video_id}")
@@ -285,6 +327,7 @@ async def delete_video(video_id: int, db: Session = Depends(get_db)): # 👈 DB 
         "message": "삭제 완료",
         "file_deleted": file_deleted
     }
+
 @router.patch("/{video_id}",response_model=VideoSchema)
 async def update_video_filename(
     video_id : int,
@@ -402,3 +445,5 @@ async def replace_video_file(
             os.remove(new_file_path) # 새로 저장한 파일 삭제
         
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during replacement: {e}")
+    
+

@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shorts-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # 업로드 파일 영구 보존
+      - ./uploads:/app/uploads
+      # 데이터베이스 파일 영구 보존
+      - ./app:/app/app
+    environment:
+      - DATABASE_URL=sqlite:///./app/video_metadata.db
+      - UPLOAD_DIR=uploads/videos
+      - MAX_FILE_SIZE=104857600
+      - ALLOWED_EXTENSIONS=.mp4,.mov,.avi,.webm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 120s
+      timeout: 15s
+      retries: 2
+      start_period: 60s
+
+  # Nginx 프록시 ( 나중에 )
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: shorts-nginx
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - api
+  #   restart: unless-stopped
+
+volumes:
+  uploads:
+  app:
