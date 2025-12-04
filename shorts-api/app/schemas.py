@@ -40,6 +40,13 @@ class VideoResponse(VideoBase):
     class Config:
         from_attributes = True
 
+class VideoListResponse(BaseModel):
+    total: int
+    videos: List[Video]
+
+    class Config:
+        from_attributes = True
+
 class LikeResponse(BaseModel):
     """좋아요 응답"""
     id: int

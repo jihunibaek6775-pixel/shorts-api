@@ -10,8 +10,10 @@ from typing import List
 from sqlalchemy.orm import Session # 세션 임포트
 from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db # DB 관련 임포트
-from app.schemas import Video as VideoSchema,VideoUpdate # 스키마 임포트
+from app.schemas import Video as VideoSchema,VideoUpdate , VideoListResponse# 스키마 임포트
 from app.models import Video,Comments,Like
+from app.s3_client import upload_file_to_s3, delete_file_from_s3, s3_client, BUCKET_NAME
+from urllib.parse import quote
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -67,68 +69,79 @@ async def search_videos(
     }
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED, response_model=VideoSchema)
-async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)): # 👈 DB 의존성 주입
+async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """동영상 업로드"""
     
-    # 1. 파일 확장자 검증 (기존 코드와 동일)
+    # 1. 파일 확장자 검증 (동일)
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"허용되지 않는 파일 형식입니다. 허용: {', '.join(ALLOWED_EXTENSIONS)}"
+            detail=f"허용되지 않는 파일 형식입니다."
         )
     
-    # 2. 고유 파일명 생성 (기존 코드와 동일)
+    # 2. 고유 파일명 생성 (동일)
     unique_filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = UPLOAD_DIR / unique_filename
     
-    # 3. 파일 저장 및 크기 확인 (기존 코드와 동일)
+    # 3. 파일 내용 읽기 (메모리에서 처리)
     try:
-        # 파일을 임시로 저장하여 크기를 확인
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        file_content = await file.read()
+        file_size = len(file_content)
         
-        file_size = os.path.getsize(file_path)
-        
+        # 파일 크기 검증
         if file_size > MAX_FILE_SIZE:
-            os.remove(file_path) 
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"파일 크기가 너무 큽니다. 최대: {MAX_FILE_SIZE / 1024 / 1024}MB"
+                detail=f"파일 크기가 너무 큽니다."
             )
         
+        # 4. S3에 업로드 ⭐
+        s3_url = upload_file_to_s3(
+            file_content=file_content,
+            filename=unique_filename,
+            content_type=file.content_type
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        if file_path.exists():
-            os.remove(file_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"파일 저장 실패: {str(e)}"
+            detail=f"파일 업로드 실패: {str(e)}"
         )
     
-    # 4. 메타데이터 DB 저장 (기존 videos_db 대체)
-    # SQLAlchemy 모델 인스턴스 생성
+    # 5. DB에 S3 URL 저장 ⭐
     db_video = Video(
         filename=unique_filename,
         original_filename=file.filename,
-        file_path=str(file_path),
+        file_path=s3_url,  # S3 URL로 저장!
         file_size=file_size,
         content_type=file.content_type
     )
     
-    db.add(db_video) # DB 세션에 추가
-    db.commit()      # DB에 반영
-    db.refresh(db_video) # DB로부터 생성된 ID 등을 포함하여 객체 갱신
+    db.add(db_video)
+    db.commit()
+    db.refresh(db_video)
     
-    # 응답은 Pydantic 스키마(VideoSchema)에 맞춤
     return db_video
 
 
-@router.get("/", response_model=List[VideoSchema]) # 👈 응답 모델 수정
-async def get_videos(db: Session = Depends(get_db)): # 👈 DB 의존성 주입
+@router.get("/", response_model=VideoListResponse) # 👈 응답 모델 수정
+async def get_videos(skip : int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+    ): # 👈 DB 의존성 주입
+
     """동영상 목록 조회"""
-    videos = db.query(Video).all()
+
+    videos = db.query(Video).order_by(Video.id.desc()).offset(skip).limit(limit).all()
     # Pydantic이 ORM_MODE=True 덕분에 SQLAlchemy 객체 리스트를 스키마 리스트로 변환함
-    return videos 
+    total = db.query(Video).count()
+
+    return {
+        "total": total,
+        "videos": videos
+    }
 
 
 @router.get("/{video_id}", response_model=VideoSchema) # 👈 응답 모델 수정
@@ -147,234 +160,157 @@ async def get_video(video_id: int, db: Session = Depends(get_db)): # 👈 DB 의
     return video # SQLAlchemy 객체 반환
 
 
+from app.s3_client import s3_client, BUCKET_NAME
+
 @router.get("/{video_id}/stream")
 async def stream_video(video_id: int, request: Request, db: Session = Depends(get_db)):
     """동영상 스트리밍 (Range Request 지원)"""
 
-    # 비디오 찾기
     video = db.query(Video).filter(Video.id == video_id).first()
-
     if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="동영상을 찾을 수 없습니다."
-        )
-
-    file_path = Path(video.file_path)
-
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="비디오 파일을 찾을 수 없습니다."
-        )
-
-    # 파일 크기
-    file_size = os.path.getsize(file_path)
+        raise HTTPException(status_code=404, detail="동영상을 찾을 수 없습니다.")
 
     # Range 헤더 확인
     range_header = request.headers.get("range")
-
-    # Range 요청이 없으면 전체 파일 반환
+    
+    # Range 요청 없으면 전체 파일
     if not range_header:
-        return FileResponse(
-            path=file_path,
-            media_type="video/mp4",
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(file_size),
-            }
-        )
-
-    # Range 헤더 파싱 (예: "bytes=0-1023")
+        try:
+            # S3에서 파일 가져오기 ⭐
+            s3_response = s3_client.get_object(
+                Bucket=BUCKET_NAME,
+                Key=video.filename
+            )
+            
+            return StreamingResponse(
+                s3_response['Body'].iter_chunks(),
+                media_type=video.content_type,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(video.file_size),
+                }
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"스트리밍 실패: {str(e)}")
+    
+    # Range 헤더 파싱
     range_str = range_header.replace("bytes=", "")
     start, end = range_str.split("-")
-
+    
     start = int(start)
-    end = int(end) if end else file_size - 1
-
+    end = int(end) if end else video.file_size - 1
+    
     # 범위 검증
-    if start >= file_size or end >= file_size:
-        raise HTTPException(
-            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-            detail="요청한 범위가 유효하지 않습니다."
-        )
-
-    # 읽을 크기
+    if start >= video.file_size or end >= video.file_size:
+        raise HTTPException(status_code=416, detail="유효하지 않은 범위")
+    
     chunk_size = end - start + 1
-
-    # 파일에서 해당 범위 읽기
-    def iter_file():
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            remaining = chunk_size
-            while remaining > 0:
-                read_size = min(8192, remaining)  # 8KB씩 읽기
-                data = f.read(read_size)
-                if not data:
-                    break
-                remaining -= len(data)
-                yield data
-
-    # 206 Partial Content 응답
-    return StreamingResponse(
-        iter_file(),
-        status_code=206,
-        media_type="video/mp4",
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(chunk_size),
-        }
-    )
+    
+    try:
+        # S3 Range Request ⭐
+        s3_response = s3_client.get_object(
+            Bucket=BUCKET_NAME,
+            Key=video.filename,
+            Range=f"bytes={start}-{end}"
+        )
+        
+        return StreamingResponse(
+            s3_response['Body'].iter_chunks(),
+            status_code=206,
+            media_type=video.content_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{video.file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"스트리밍 실패: {str(e)}")
 
 
 @router.get("/{video_id}/download")
 async def download_video(video_id: int, db: Session = Depends(get_db)):
-    """동영상 다운로드 (별도 엔드포인트)"""
-
+    """동영상 다운로드"""
+    
     video = db.query(Video).filter(Video.id == video_id).first()
-
     if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="동영상을 찾을 수 없습니다."
-        )
-
-    file_path = Path(video.file_path)
-
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="비디오 파일을 찾을 수 없습니다."
-        )
+        raise HTTPException(status_code=404, detail="동영상을 찾을 수 없습니다.")
     
-    file_ext = file_path.suffix  # .mp4, .mov, .avi 등
-    
-    # original_filename에 이미 확장자가 있는지 확인
-    if video.original_filename.endswith(file_ext):
-        # 이미 확장자 있음 → 그대로 사용
-        download_filename = video.original_filename
-    else:
-        # 확장자 없음 → 자동 추가
-        download_filename = f"{video.original_filename}{file_ext}"
+    try:
+        # S3에서 파일 가져오기 ⭐
+        s3_response = s3_client.get_object(
+            Bucket=BUCKET_NAME,
+            Key=video.filename
+        )
+        
+        # 파일명 처리
+        file_ext = Path(video.filename).suffix
+        download_filename = video.original_filename if video.original_filename.endswith(file_ext) else f"{video.original_filename}{file_ext}"
+        
+        encoded_filename = quote(download_filename)
 
-    return FileResponse(
-        path=file_path,
-        media_type="application/octet-stream",
-        filename=download_filename,
-    )
+        return StreamingResponse(
+            s3_response['Body'].iter_chunks(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"다운로드 실패: {str(e)}")
+    
+
+
 
 
 @router.delete("/{video_id}", status_code=status.HTTP_200_OK)
-async def delete_video(video_id: int, db: Session = Depends(get_db)): # 👈 DB 의존성 주입
+async def delete_video(video_id: int, db: Session = Depends(get_db)):
     """동영상 삭제"""
     
-    # 비디오 , 댓글 , 좋아요 찾기
     video = db.query(Video).filter(Video.id == video_id).first()
-
-    
     if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="동영상을 찾을 수 없습니다."
-        )
+        raise HTTPException(status_code=404, detail="동영상을 찾을 수 없습니다.")
     
-    # 1. 파일 삭제
-    file_path = Path(video.file_path)
-
-     # DB에서 먼저 삭제
+    # DB에서 먼저 삭제
     try:
-        db.query(Comments).filter(Comments.video_id == video_id).delete()
-        
-        # 2. 좋아요 전체 삭제
-        db.query(Like).filter(Like.video_id == video_id).delete()
-
         db.delete(video)
         db.commit()
         logger.info(f"✅ DB 삭제 완료: video_id={video_id}")
     except Exception as e:
         db.rollback()
-        logger.error(f"DB 삭제 실패: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="DB 삭제 실패"
-        )
+        raise HTTPException(status_code=500, detail="DB 삭제 실패")
     
-    # 파일 삭제 (에러가 나도 무시)
+    # S3에서 파일 삭제 ⭐
     file_deleted = False
-    if file_path.exists():
-        for attempt in range(3):
-            try:
-                if attempt > 0:
-                    await asyncio.sleep(0.2)
-                
-                os.remove(file_path)
-                logger.info(f"✅ 파일 삭제 성공: {file_path}")
-                file_deleted = True
-                break
-                
-            except PermissionError:
-                logger.warning(f"⚠️ 파일 사용 중 (시도 {attempt + 1}/3)")
-                # 마지막 시도에도 실패하면 그냥 넘어감
-                
-            except Exception as e:
-                logger.error(f"파일 삭제 오류: {e}")
-                break
+    try:
+        delete_file_from_s3(video.filename)
+        logger.info(f"✅ S3 파일 삭제 성공: {video.filename}")
+        file_deleted = True
+    except Exception as e:
+        logger.error(f"S3 파일 삭제 오류: {e}")
+        # 파일 삭제 실패해도 DB는 이미 삭제됨
     
-    # 성공 응답 (파일 삭제 실패해도 200 반환)
     return {
         "success": True,
         "message": "삭제 완료",
         "file_deleted": file_deleted
     }
 
-@router.patch("/{video_id}",response_model=VideoSchema)
-async def update_video_filename(
-    video_id : int,
-    video_update : VideoUpdate,
-    db : Session = Depends(get_db)
-):
-    """비디오 원본 파일명(original_filename) 수정"""
-    # 비디오 찾기                                     
-    video = db.query(Video).filter(Video.id == video_id).first()
-
-    if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="동영상을 찾을 수 없습니다."
-        )
-    update_data = video_update.dict(exclude_unset=True)
-    if not update_data : 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="수정할 내용이 없습니다."    
-        )
-    
-    if "original_filename" in update_data :
-        video.original_filename = update_data["original_filename"]
-    try :
-        db.commit()
-        db.refresh(video)
-        logger.info(f"✅ 동영상 정보 수정 완료: video_id={video_id}, new_filename={video.original_filename}")
-    except Exception as e:
-        db.rollback()
-        logger.error(f"DB 정보 수정 실패: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="DB 정보 수정 실패"
-        )
-    
-    return video
-
-@router.put("/{video_id}",response_model=VideoSchema)
-async def replace_video_file(
-    video_id: int, 
-    file: UploadFile = File(..., description="교체할 새로운 동영상 파일"),
-    # original_filename을 폼 데이터로 받거나, 파일 이름 그대로 사용
-    original_filename: str = Form(None), 
+@router.put("/{video_id}", response_model=VideoSchema)
+async def update_video(
+    video_id: int,
+    file: UploadFile = File(None),  # 선택사항
+    original_filename: str = Form(None),  # 선택사항
     db: Session = Depends(get_db)
 ):
-    #비디오 찾기
+    """
+    동영상 정보 수정
+    - original_filename만 제공: 이름만 변경
+    - file만 제공: 파일만 교체
+    - 둘 다 제공: 파일 교체 + 이름 변경
+    """
+    
+    # 1. 비디오 찾기
     video = db.query(Video).filter(Video.id == video_id).first()
     if not video:
         raise HTTPException(
@@ -382,68 +318,103 @@ async def replace_video_file(
             detail="동영상을 찾을 수 없습니다."
         )
     
-    old_file_path = video.file_path
+    # 2. 수정할 내용이 있는지 확인
+    if not file and not original_filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다. (파일 또는 파일명을 제공하세요)"
+        )
     
-    # 2. 새 파일 정보 준비 및 저장
-    # 파일명 충돌 방지를 위해 UUID나 고유한 이름 사용
-    file_extension = os.path.splitext(file.filename)[1]
-    new_filename = f"{os.urandom(16).hex()}{file_extension}"
-    new_file_path = os.path.join(UPLOAD_DIR, new_filename)
+    old_filename = video.filename  # S3 삭제용
     
-    # 새 파일 임시 저장
+    # 3. 파일 교체 (file이 제공된 경우)
+    if file:
+        # 파일 확장자 검증
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"허용되지 않는 파일 형식입니다. 허용: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+        
+        # 새 고유 파일명 생성
+        new_unique_filename = f"{uuid.uuid4()}{file_ext}"
+        
+        try:
+            # 파일 내용 읽기
+            file_content = await file.read()
+            new_file_size = len(file_content)
+            
+            # 파일 크기 검증
+            if new_file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"파일 크기가 너무 큽니다. 최대: {MAX_FILE_SIZE / 1024 / 1024}MB"
+                )
+            
+            # S3에 새 파일 업로드
+            new_s3_url = upload_file_to_s3(
+                file_content=file_content,
+                filename=new_unique_filename,
+                content_type=file.content_type
+            )
+            
+            # DB 필드 업데이트
+            video.filename = new_unique_filename
+            video.file_path = new_s3_url
+            video.file_size = new_file_size
+            video.content_type = file.content_type
+            
+            logger.info(f"✅ S3 파일 업로드 성공: {new_unique_filename}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"파일 업로드 실패: {str(e)}"
+            )
+    
+    # 4. 파일명 변경 (original_filename이 제공된 경우)
+    if original_filename:
+        video.original_filename = original_filename
+        logger.info(f"✅ 파일명 변경: {original_filename}")
+    
+    # 5. DB 커밋
     try:
-        with open(new_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # 파일 크기 확인
-        new_file_size = os.path.getsize(new_file_path)
-        
-    except Exception as e:
-        # 파일 저장 실패 시 500 에러 반환
-        raise HTTPException(status_code=500, detail=f"Failed to save new file: {e}")
-
-    # 3. DB 업데이트 시도 (트랜잭션 시작)
-    try:
-        # DB 필드 업데이트
-        video.file_path = new_file_path
-        video.file_size = new_file_size
-        video.original_filename = original_filename if original_filename else file.filename
-        video.content_type = file.content_type
-        video.filename = new_filename
-        # updated_at은 models.py의 onupdate에 의해 자동으로 갱신됩니다.
-        
-        db.add(video)
         db.commit()
         db.refresh(video)
+        logger.info(f"✅ DB 업데이트 완료: video_id={video_id}")
         
-        # 4. 성공 시: 기존 파일 삭제
-        if os.path.exists(old_file_path):
+        # 6. 파일 교체 성공 시 기존 S3 파일 삭제
+        if file and old_filename != video.filename:
             try:
-                os.remove(old_file_path)
-
-            except PermissionError:
-            # 파일 사용 중이면 무시 (나중에 수동 삭제)
-                logger.warning(f"⚠️ 기존 파일 삭제 실패 (사용 중): {old_file_path}")
+                delete_file_from_s3(old_filename)
+                logger.info(f"✅ 기존 S3 파일 삭제 성공: {old_filename}")
             except Exception as e:
-                logger.error(f"❌ 파일 삭제 오류: {e}")
+                # 기존 파일 삭제 실패해도 무시 (새 파일은 이미 업로드됨)
+                logger.warning(f"⚠️ 기존 S3 파일 삭제 실패: {e}")
         
         return video
-
+        
     except SQLAlchemyError as e:
-        # 5. DB 업데이트 실패 시: 롤백 및 새로 저장한 파일 삭제
         db.rollback()
-        if os.path.exists(new_file_path):
-            os.remove(new_file_path) # 새로 저장한 파일 삭제 (롤백)
         
-        # 500 에러를 반환하여 클라이언트에게 실패 알림
-        raise HTTPException(status_code=500, detail=f"Database update failed. Rolled back. Error: {e}")
-
-    except Exception as e:
-        # 기타 예상치 못한 오류 발생 시
-        db.rollback() # 혹시 모를 트랜잭션 롤백
-        if os.path.exists(new_file_path):
-            os.remove(new_file_path) # 새로 저장한 파일 삭제
+        # DB 업데이트 실패 시: 새로 업로드한 S3 파일 삭제
+        if file:
+            try:
+                delete_file_from_s3(video.filename)
+                logger.info(f"🔄 롤백: 새 S3 파일 삭제")
+            except Exception:
+                pass
         
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during replacement: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"DB 업데이트 실패: {str(e)}"
+        )
     
 
+        new_original_name = Path(file.filename).stem
+        new_s3_filename = f"{new_original_name}_{uuid.uuid4()}{file_ext}"
+        asd = {uuid.uuid4()}
+        

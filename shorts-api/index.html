@@ -733,6 +733,10 @@
         <div class="comment-list" id="commentList">
             <!-- 댓글이 여기에 동적으로 추가됩니다 -->
         </div>
+        <!-- 댓글 더 보기 버튼 -->
+        <div id="loadMoreCommentsContainer" style="text-align: center; padding: 10px;">
+            <button id="loadMoreCommentsBtn" class="modal-btn secondary" style="display: none; width: auto; padding: 8px 20px;">더 보기</button>
+        </div>
         <div class="comment-input-container">
             <div class="comment-input-wrapper">
                 <textarea
@@ -783,6 +787,12 @@
         let currentReplaceVideoId = null;
         let currentCommentVideoId = null;
 
+        // 동영상 페이지네이션을 위한 변수
+        let currentVideoPage = 1;
+        const VIDEO_PAGE_SIZE = 5; // 한 번에 5개씩 로드
+        let totalVideos = 0;
+        let isLoadingVideos = false;
+
         // 파일 크기 포맷
         function formatFileSize(bytes) {
             if (bytes === 0) return '0 Bytes';
@@ -800,13 +810,20 @@
         // 동영상 목록 최초 로드
         async function initialLoad() {
             const loadingScreen = document.getElementById('loadingScreen');
+            if(isLoadingVideos) return;
+            isLoadingVideos = true;
+
             try {
-                const response = await fetch(`${API_URL}/`);
-                allVideos = await response.json();
+                // 페이지네이션을 적용하여 첫 페이지 데이터 요청 (skip=0)
+                const response = await fetch(`${API_URL}/?skip=0&limit=${VIDEO_PAGE_SIZE}`);
+                const data = await response.json(); // 이제 { total: ..., videos: [...] } 형태
+
+                totalVideos = data.total;
+                allVideos = data.videos; // 응답 객체에서 videos 배열을 가져옴
                 displayedVideos = allVideos;
 
                 loadingScreen.style.display = 'none';
-                renderVideos(displayedVideos);
+                renderVideos(displayedVideos, false); // false: 기존 내용을 지우고 새로 렌더링
 
             } catch (error) {
                 console.error('Error:', error);
@@ -816,19 +833,53 @@
                     <p>서버 연결을 확인해주세요</p>
                 `;
             }
+            isLoadingVideos = false;
+        }
+
+        // 추가 동영상 로드 (무한 스크롤용)
+        async function loadMoreVideos() {
+            // 이미 로딩 중이거나 모든 영상을 다 불렀으면 중단
+            if (isLoadingVideos || allVideos.length >= totalVideos) {
+                return;
+            }
+            
+            isLoadingVideos = true;
+            console.log("Loading more videos...");
+
+            const skip = currentVideoPage * VIDEO_PAGE_SIZE;
+            try {
+                const response = await fetch(`${API_URL}/?skip=${skip}&limit=${VIDEO_PAGE_SIZE}`);
+                const data = await response.json();
+                
+                if (data.videos && data.videos.length > 0) {
+                    const newVideos = data.videos;
+                    allVideos = [...allVideos, ...newVideos]; // 기존 목록에 새 비디오 추가
+                    displayedVideos = allVideos;
+                    
+                    renderVideos(newVideos, true); // true: 기존 내용에 추가하여 렌더링
+                    currentVideoPage++;
+                }
+
+            } catch(error) {
+                console.error('Error loading more videos:', error);
+            } finally {
+                isLoadingVideos = false;
+            }
         }
         
-        // 비디오 목록을 화면에 렌더링하는 함수
-        function renderVideos(videosToRender) {
+        // 비디오 목록을 화면에 렌더링하는 함수 (수정됨)
+        function renderVideos(videosToRender, append = false) {
             const shortsContainer = document.getElementById('shortsContainer');
-            shortsContainer.innerHTML = '';
+            if (!append) {
+                shortsContainer.innerHTML = '';
+            }
 
-            if (videosToRender.length === 0) {
+            if (!append && videosToRender.length === 0) {
                 shortsContainer.innerHTML = `
                     <div class="empty-screen">
                         <div class="empty-icon">😢</div>
-                        <h2>검색 결과가 없습니다</h2>
-                        <p>다른 검색어로 다시 시도해보세요.</p>
+                        <h2>영상이 없습니다</h2>
+                        <p>첫 영상을 업로드 해보세요.</p>
                     </div>
                 `;
                 updateVideoInfoOverlay(null);
@@ -966,8 +1017,10 @@
                 }
             });
 
-            // 첫 번째 비디오 자동 재생 및 정보 업데이트
-            playVideoInView();
+            // append가 아닐 때만 (즉, 첫 로드 시에만) 첫 비디오 재생
+            if (!append) {
+                playVideoInView();
+            }
         }
 
         // 비디오 정보 오버레이 업데이트
@@ -987,10 +1040,17 @@
             }
         }
 
-        // 스크롤 시 현재 비디오 재생
+        // 스크롤 시 현재 비디오 재생 및 추가 로드
         const shortsContainer = document.getElementById('shortsContainer');
         shortsContainer.addEventListener('scroll', () => {
             playVideoInView();
+
+            // 무한 스크롤 로직
+            const { scrollTop, scrollHeight, clientHeight } = shortsContainer;
+            // 스크롤이 끝에 거의 다다랐을 때 (예: 85% 지점)
+            if (scrollTop + clientHeight >= scrollHeight * 0.85) {
+                loadMoreVideos();
+            }
         });
 
         // 화면에 보이는 비디오 재생
@@ -1286,15 +1346,22 @@
             }
         });
 
+        // --- 댓글 페이지네이션 변수 ---
+        let currentCommentPage = 1;
+        const COMMENT_PAGE_SIZE = 10;
+        let totalComments = 0;
+        let isLoadingComments = false;
+        // -----------------------------
+
         // 댓글 개수 로드
         async function loadCommentCount(videoId) {
             try {
-                const response = await fetch(`${API_URL}/${videoId}/comments`);
+                const response = await fetch(`${API_URL}/${videoId}/comments?limit=1`);
                 if (response.ok) {
-                    const comments = await response.json();
+                    const data = await response.json();
                     const commentCountElement = document.getElementById(`comment-count-${videoId}`);
                     if (commentCountElement) {
-                        commentCountElement.textContent = comments.length;
+                        commentCountElement.textContent = data.total;
                     }
                 }
             } catch (error) {
@@ -1311,9 +1378,18 @@
             if (currentCommentVideoId === videoId && commentPanel.classList.contains('active')) {
                 closeCommentPanel();
             } else {
+                // 패널 열기
                 currentCommentVideoId = videoId;
                 commentPanel.classList.add('active');
                 commentOverlay.classList.add('active');
+
+                // 페이지네이션 상태 초기화
+                currentCommentPage = 1;
+                isLoadingComments = false;
+                totalComments = 0;
+                document.getElementById('commentList').innerHTML = ''; // 목록 비우기
+                document.getElementById('loadMoreCommentsBtn').style.display = 'none'; // 버튼 숨기기
+
 
                 document.querySelectorAll('.action-btn.comment').forEach(btn => {
                     btn.classList.remove('active');
@@ -1322,7 +1398,7 @@
                 if (commentBtn) {
                     commentBtn.classList.add('active');
                 }
-                loadComments(videoId);
+                loadComments(); // 첫 페이지 댓글 로드
             }
         }
 
@@ -1338,16 +1414,73 @@
             currentCommentVideoId = null;
         }
 
-        // 댓글 목록 로드
-        async function loadComments(videoId) {
+        // 댓글 목록 렌더링 (append 전용)
+        function renderCommentList(comments) {
+            const commentList = document.getElementById('commentList');
+
+            commentList.innerHTML += comments.map(comment => {
+                const commentDate = new Date(comment.created_at);
+                let timeAgo;
+
+                if (isNaN(commentDate.getTime())) {
+                    timeAgo = '';
+                } else {
+                    const now = new Date();
+                    const diffMs = now - commentDate;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffHours = Math.floor(diffMs / 3600000);
+                    const diffDays = Math.floor(diffMs / 86400000);
+
+                    if (diffMins < 1) timeAgo = '방금 전';
+                    else if (diffMins < 60) timeAgo = `${diffMins}분 전`;
+                    else if (diffHours < 24) timeAgo = `${diffHours}시간 전`;
+                    else if (diffDays < 7) timeAgo = `${diffDays}일 전`;
+                    else timeAgo = commentDate.toLocaleDateString('ko-KR');
+                }
+                
+                const escapedContent = document.createElement('div');
+                escapedContent.innerText = comment.content;
+
+                return `
+                    <div class="comment-item" id="comment-item-${comment.id}">
+                        <div class="comment-body">
+                            <div class="comment-user">${comment.user_identifier}</div>
+                            <div class="comment-content">${escapedContent.innerHTML}</div>
+                            <div class="comment-date">${timeAgo}</div>
+                            <div class="comment-actions">
+                                <button class="comment-action-btn" onclick='showEditForm(${comment.id}, ${JSON.stringify(comment.content)})'>수정</button>
+                                <button class="comment-action-btn" onclick="deleteComment(currentCommentVideoId, ${comment.id})">삭제</button>
+                            </div>
+                        </div>
+                        <div class="comment-edit-form" id="edit-form-${comment.id}">
+                            <textarea class="comment-edit-input" id="edit-input-${comment.id}" rows="3">${escapedContent.innerText}</textarea>
+                            <div class="comment-edit-buttons">
+                                <button class="modal-btn secondary" style="padding: 8px 12px; font-size: 12px;" onclick="cancelEdit(${comment.id})">취소</button>
+                                <button class="modal-btn primary" style="padding: 8px 12px; font-size: 12px;" onclick="updateComment(currentCommentVideoId, ${comment.id})">저장</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 댓글 첫 페이지 로드
+        async function loadComments() {
+            if (isLoadingComments || !currentCommentVideoId) return;
+
+            isLoadingComments = true;
             const commentList = document.getElementById('commentList');
             const commentPanelCount = document.getElementById('commentPanelCount');
-
+            const loadMoreBtn = document.getElementById('loadMoreCommentsBtn');
+            
             try {
-                const response = await fetch(`${API_URL}/${videoId}/comments`);
+                const response = await fetch(`${API_URL}/${currentCommentVideoId}/comments?skip=0&limit=${COMMENT_PAGE_SIZE}`);
                 if (response.ok) {
-                    const comments = await response.json();
-                    commentPanelCount.textContent = comments.length;
+                    const data = await response.json();
+                    const comments = data.comments;
+                    
+                    totalComments = data.total;
+                    commentPanelCount.textContent = totalComments;
 
                     if (comments.length === 0) {
                         commentList.innerHTML = `
@@ -1356,57 +1489,60 @@
                                 <p>첫 번째 댓글을 남겨보세요!</p>
                             </div>
                         `;
+                        loadMoreBtn.style.display = 'none';
                     } else {
-                        commentList.innerHTML = comments.map(comment => {
-                            const commentDate = new Date(comment.created_at);
-                            const now = new Date();
-                            const diffMs = now - commentDate;
-                            const diffMins = Math.floor(diffMs / 60000);
-                            const diffHours = Math.floor(diffMs / 3600000);
-                            const diffDays = Math.floor(diffMs / 86400000);
-
-                            let timeAgo;
-                            if (diffMins < 1) timeAgo = '방금 전';
-                            else if (diffMins < 60) timeAgo = `${diffMins}분 전`;
-                            else if (diffHours < 24) timeAgo = `${diffHours}시간 전`;
-                            else if (diffDays < 7) timeAgo = `${diffDays}일 전`;
-                            else timeAgo = commentDate.toLocaleDateString('ko-KR');
-                            
-                            // XSS 방지를 위해 content를 텍스트로 처리
-                            const escapedContent = document.createElement('div');
-                            escapedContent.innerText = comment.content;
-
-                            return `
-                                <div class="comment-item" id="comment-item-${comment.id}">
-                                    <div class="comment-body">
-                                        <div class="comment-user">${comment.user_identifier}</div>
-                                        <div class="comment-content">${escapedContent.innerHTML}</div>
-                                        <div class="comment-date">${timeAgo}</div>
-                                        <div class="comment-actions">
-                                            <button class="comment-action-btn" onclick="showEditForm(${comment.id}, \`${comment.content.replace(/`/g, '\\`')}\`)">수정</button>
-                                            <button class="comment-action-btn" onclick="deleteComment(currentCommentVideoId, ${comment.id})">삭제</button>
-                                        </div>
-                                    </div>
-                                    <div class="comment-edit-form" id="edit-form-${comment.id}">
-                                        <textarea class="comment-edit-input" id="edit-input-${comment.id}" rows="3">${escapedContent.innerText}</textarea>
-                                        <div class="comment-edit-buttons">
-                                            <button class="modal-btn secondary" style="padding: 8px 12px; font-size: 12px;" onclick="cancelEdit(${comment.id})">취소</button>
-                                            <button class="modal-btn primary" style="padding: 8px 12px; font-size: 12px;" onclick="updateComment(currentCommentVideoId, ${comment.id})">저장</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join('');
+                        renderCommentList(comments);
+                        // 더 불러올 댓글이 있는지 확인
+                        const loadedCount = document.querySelectorAll('.comment-item').length;
+                        if (loadedCount < totalComments) {
+                            loadMoreBtn.style.display = 'inline-block';
+                        } else {
+                            loadMoreBtn.style.display = 'none';
+                        }
                     }
                 }
             } catch (error) {
                 console.error('Error loading comments:', error);
-                commentList.innerHTML = `
-                    <div class="empty-comments">
-                        <div class="empty-comments-icon">⚠️</div>
-                        <p>댓글을 불러올 수 없습니다</p>
-                    </div>
-                `;
+                commentList.innerHTML = `<div class="empty-comments"><p>댓글을 불러올 수 없습니다</p></div>`;
+            } finally {
+                isLoadingComments = false;
+            }
+        }
+
+        // 댓글 더 불러오기
+        async function loadMoreComments() {
+            if (isLoadingComments) return;
+            isLoadingComments = true;
+
+            const loadMoreBtn = document.getElementById('loadMoreCommentsBtn');
+            loadMoreBtn.disabled = true;
+            loadMoreBtn.textContent = '로딩 중...';
+            
+            const skip = currentCommentPage * COMMENT_PAGE_SIZE;
+
+            try {
+                const response = await fetch(`${API_URL}/${currentCommentVideoId}/comments?skip=${skip}&limit=${COMMENT_PAGE_SIZE}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const newComments = data.comments;
+                    
+                    if (newComments.length > 0) {
+                        renderCommentList(newComments);
+                        currentCommentPage++;
+                    }
+
+                    // 현재까지 로드된 댓글 수 확인
+                    const loadedCount = document.querySelectorAll('.comment-item').length;
+                    if (loadedCount >= totalComments) {
+                        loadMoreBtn.style.display = 'none';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading more comments:', error);
+            } finally {
+                isLoadingComments = false;
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.textContent = '더 보기';
             }
         }
 
@@ -1431,8 +1567,10 @@
 
                 if (response.ok) {
                     commentInput.value = '';
-                    await loadComments(currentCommentVideoId);
-                    await loadCommentCount(currentCommentVideoId);
+                    // 상태 초기화 후 첫 페이지부터 다시 로드
+                    const videoId = currentCommentVideoId;
+                    toggleCommentPanel(videoId); // 닫았다가
+                    toggleCommentPanel(videoId); // 다시 열어서 새로고침
                 } else {
                     const error = await response.json();
                     alert('댓글 작성 실패: ' + error.detail);
@@ -1479,11 +1617,21 @@
                 });
 
                 if (response.ok) {
-                    await loadComments(videoId); // 성공 시 댓글 목록 새로고침
+                    const updatedComment = await response.json();
+                    const contentDiv = document.querySelector(`#comment-item-${commentId} .comment-content`);
+                    const editInput = document.querySelector(`#comment-item-${commentId} .comment-edit-input`);
+                    
+                    const escapedContent = document.createElement('div');
+                    escapedContent.innerText = updatedComment.content;
+                    
+                    if(contentDiv) contentDiv.innerHTML = escapedContent.innerHTML;
+                    if(editInput) editInput.value = updatedComment.content;
+                    
+                    cancelEdit(commentId); // 폼 닫기
                 } else {
                     const error = await response.json();
                     alert('댓글 수정 실패: ' + (error.detail || '알 수 없는 오류'));
-                    cancelEdit(commentId); // 실패 시 원래대로 복구
+                    cancelEdit(commentId);
                 }
             } catch (error) {
                 console.error('Error updating comment:', error);
@@ -1506,20 +1654,29 @@
                 });
 
                 if (response.ok) {
-                    await loadComments(videoId);
-                    await loadCommentCount(videoId);
+                    const commentItem = document.getElementById(`comment-item-${commentId}`);
+                    if (commentItem) {
+                        commentItem.remove();
+                    }
+                    totalComments--;
+                    document.getElementById('commentPanelCount').textContent = totalComments;
+                    const commentCountBadge = document.getElementById(`comment-count-${videoId}`);
+                    if(commentCountBadge) commentCountBadge.textContent = totalComments;
+
                 } else {
                     const error = await response.json();
                     alert('댓글 삭제 실패: ' + (error.detail || '알 수 없는 오류'));
                 }
-            } catch (error) {
+            } catch (error)
+                {
                 console.error('Error deleting comment:', error);
                 alert('댓글 삭제 중 오류 발생');
             }
         }
 
-        // 댓글 입력창에서 Enter 키로 댓글 작성 (Shift+Enter는 줄바꿈)
+        // DOMContentLoaded 이벤트 리스너
         document.addEventListener('DOMContentLoaded', () => {
+            // 댓글 입력창에서 Enter 키로 댓글 작성 (Shift+Enter는 줄바꿈)
             const commentInput = document.getElementById('commentInput');
             if (commentInput) {
                 commentInput.addEventListener('keydown', (e) => {
@@ -1528,6 +1685,11 @@
                         submitComment();
                     }
                 });
+            }
+            // '더 보기' 버튼 이벤트 리스너 추가
+            const loadMoreBtn = document.getElementById('loadMoreCommentsBtn');
+            if(loadMoreBtn) {
+                loadMoreBtn.addEventListener('click', loadMoreComments);
             }
         });
 
