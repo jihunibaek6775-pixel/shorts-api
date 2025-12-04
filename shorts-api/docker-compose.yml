@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: shorts-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
       context: .
@@ -9,24 +27,25 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # 업로드 파일 영구 보존
-      - ./uploads:/app/uploads
-      # 데이터베이스 파일 영구 보존
+      # 개발 중 코드 변경 반영 (프로덕션에서는 제거 가능)
       - ./app:/app/app
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=sqlite:///./app/video_metadata.db
-      - UPLOAD_DIR=uploads/videos
-      - MAX_FILE_SIZE=104857600
-      - ALLOWED_EXTENSIONS=.mp4,.mov,.avi,.webm
+      # .env 파일의 값을 오버라이드하거나 추가
+      - DATABASE_URL=postgresql://postgres:postgres123@db:5432/shortsapi
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 120s
       timeout: 15s
-      retries: 2
+      retries: 3
       start_period: 60s
 
-  # Nginx 프록시 ( 나중에 )
+  # Nginx 프록시 (나중에)
   # nginx:
   #   image: nginx:alpine
   #   container_name: shorts-nginx
@@ -39,5 +58,4 @@ services:
   #   restart: unless-stopped
 
 volumes:
-  uploads:
-  app:
+  postgres_data:  # PostgreSQL 데이터 영구 저장
