@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routers import videos , likes , comments
 from .database import Base, engine , init_db
 from . import models
+import os
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
 
 # 데이터베이스 테이블 생성
 
@@ -29,7 +34,8 @@ app.add_middleware(
         "http://localhost:5174",
         "http://localhost:5173",
         "http://localhost:3000",
-        "https://www.artlion.p-e.kr/"
+        "https://www.artlion.p-e.kr",
+        "https://artlion.p-e.kr",
     ],  # 개발 중에 필요한 origin들만 허용
     allow_credentials=True,
     allow_methods=["*"],
