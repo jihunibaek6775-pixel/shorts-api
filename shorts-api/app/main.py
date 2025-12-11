@@ -26,9 +26,10 @@ def startup_event():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5174,"
-        "http://localhost:5173,"
-        "http://localhost:3000"],  # 개발 중에는 모든 origin 허용
+        "http://localhost:5174",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],  # 개발 중에 필요한 origin들만 허용
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
