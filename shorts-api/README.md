@@ -21,6 +21,7 @@ FastAPI 기반의 유튜브 숏폼 클론 프로젝트 백엔드 API 서버입�
 ### 인프라
 - Docker & Docker Compose
 - Nginx Proxy Manager (리버스 프록시 & SSL)
+- GitHub Actions (CI/CD)
 
 ## 주요 기능
 
@@ -167,6 +168,15 @@ docker-compose logs -f api
 docker-compose down
 ```
 
+## 배포 (GitHub Actions)
+
+`main` 브랜치에 푸시하면 GitHub Actions가 자동으로 EC2 서버에 배포합니다.
+
+필요한 GitHub Secrets:
+- `EC2_HOST`: EC2 인스턴스 IP 주소
+- `EC2_USER`: SSH 사용자명 (예: ubuntu)
+- `EC2_SSH_KEY`: SSH 프라이빗 키
+
 ## 프로젝트 구조
 
 ```
@@ -219,3 +229,8 @@ Docker 컨테이너의 상태를 모니터링하기 위한 헬스 체크 엔드�
 ## 라이센스
 
 이 프로젝트는 MIT 라이센스를 따릅니다.
+
+## 배포 주소
+
+- API: https://artlion.p-e.kr
+- API 문서: https://artlion.p-e.kr/docs
