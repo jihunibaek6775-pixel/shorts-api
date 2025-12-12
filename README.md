@@ -2,6 +2,13 @@
 
 FastAPI 기반의 유튜브 숏폼 클론 프로젝트 백엔드 API 서버입니다.
 
+# 프론트엔드 주소
+https://www.artlion.p-e.kr/
+http://43.200.134.109:5173/
+
+# 시연 영상
+https://youtu.be/PfsTYSn6KZE
+
 ## 기술 스택
 
 ### 프레임워크 & 언어
